@@ -199,12 +199,12 @@ def csv_to_kml(df: pd.DataFrame) -> str:
 
 def main():
     st.set_page_config(
-        page_title="MappingPro",
+        page_title="KMLpro",
         page_icon="🗺️",
         layout="wide"
     )
     
-    st.title("🗺️ MappingPro")
+    st.title("🗺️ KMLpro")
     st.markdown("**Aplikasi Konversi KML ↔ CSV untuk Data Geospasial** - Created by [Rendi Gunawan](https://github.com/rendinawan)")
     
     # Sidebar untuk navigasi
@@ -378,7 +378,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray;'>
-            <p>MappingPro v1.1 - Tool Konversi Data Geospasial</p>
+            <p>KMLpro v1.1 - Tool Konversi Data Geospasial</p>
             <p>Mendukung konversi KML ↔ CSV/Excel dengan perhitungan Haversine</p>
         </div>
         """, 
