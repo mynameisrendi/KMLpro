@@ -32,7 +32,7 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 
 def parse_kml_coordinates(kml_content: str) -> List[Tuple[float, float]]:
     """
-    Mengekstrak koordinat dari file KML
+    Mengekstrak koordinat dari file KML (single route)
     """
     try:
         root = ET.fromstring(kml_content)
@@ -63,9 +63,59 @@ def parse_kml_coordinates(kml_content: str) -> List[Tuple[float, float]]:
         st.error(f"Error parsing KML: {str(e)}")
         return []
 
+def parse_kml_multi_routes(kml_content: str) -> dict:
+    """
+    Mengekstrak multiple routes dari file KML
+    Returns: dictionary dengan key=route_name, value=list_of_coordinates
+    """
+    try:
+        root = ET.fromstring(kml_content)
+        
+        # Namespace KML
+        namespace = {'kml': 'http://www.opengis.net/kml/2.2'}
+        
+        routes = {}
+        
+        # Cari semua Placemark yang memiliki LineString
+        for placemark in root.findall('.//kml:Placemark', namespace):
+            # Ambil nama placemark
+            name_elem = placemark.find('kml:name', namespace)
+            route_name = name_elem.text if name_elem is not None else "Unnamed Route"
+            
+            # Cari LineString dalam placemark ini
+            linestring = placemark.find('.//kml:LineString', namespace)
+            if linestring is not None:
+                coord_elem = linestring.find('kml:coordinates', namespace)
+                if coord_elem is not None:
+                    coord_text = coord_elem.text.strip()
+                    
+                    # Split berdasarkan whitespace dan koma
+                    coord_parts = re.split(r'[\s,]+', coord_text)
+                    
+                    coordinates = []
+                    # Parse koordinat (format: longitude,latitude,altitude)
+                    for i in range(0, len(coord_parts)-2, 3):
+                        try:
+                            lon = float(coord_parts[i])
+                            lat = float(coord_parts[i+1])
+                            coordinates.append((lat, lon))
+                        except (ValueError, IndexError):
+                            continue
+                    
+                    if coordinates:
+                        # Bersihkan nama route untuk nama sheet Excel
+                        clean_name = re.sub(r'[\\/*?:\[\]<>|]', '_', route_name)
+                        clean_name = clean_name[:31]  # Limit Excel sheet name to 31 characters
+                        routes[clean_name] = coordinates
+        
+        return routes
+    except Exception as e:
+        st.error(f"Error parsing multi-route KML: {str(e)}")
+        return {}
+
 def kml_to_csv(kml_content: str) -> pd.DataFrame:
     """
-    Konversi KML ke CSV dengan perhitungan jarak dan titik tengah
+    Konversi KML ke CSV dengan perhitungan jarak dan titik tengah (single route)
     """
     coordinates = parse_kml_coordinates(kml_content)
     
@@ -100,6 +150,54 @@ def kml_to_csv(kml_content: str) -> pd.DataFrame:
         data.append(row)
     
     return pd.DataFrame(data)
+
+def kml_to_multi_excel(kml_content: str) -> BytesIO:
+    """
+    Konversi KML multi-route ke Excel dengan multiple sheets
+    """
+    routes = parse_kml_multi_routes(kml_content)
+    
+    if not routes:
+        return None
+    
+    excel_buffer = BytesIO()
+    
+    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+        for route_name, coordinates in routes.items():
+            # Buat DataFrame untuk setiap route
+            data = []
+            
+            for i in range(len(coordinates)):
+                lat, lon = coordinates[i]
+                
+                row = {
+                    'latitude': lat,
+                    'longitude': lon,
+                    'length': None,
+                    'latitude mid': None,
+                    'longitude mid': None
+                }
+                
+                # Hitung jarak dan titik tengah jika bukan baris terakhir
+                if i < len(coordinates) - 1:
+                    next_lat, next_lon = coordinates[i + 1]
+                    
+                    # Hitung jarak menggunakan Haversine
+                    distance = haversine_distance(lat, lon, next_lat, next_lon)
+                    row['length'] = round(distance)
+                    
+                    # Hitung titik tengah
+                    row['latitude mid'] = (lat + next_lat) / 2
+                    row['longitude mid'] = (lon + next_lon) / 2
+                
+                data.append(row)
+            
+            df = pd.DataFrame(data)
+            
+            # Tulis ke sheet dengan nama route
+            df.to_excel(writer, sheet_name=route_name, index=False)
+    
+    return excel_buffer
 
 def csv_to_kml(df: pd.DataFrame) -> str:
     """
@@ -205,7 +303,7 @@ def main():
     )
     
     st.title("🗺️ KMLpro")
-    st.markdown("**Aplikasi Konversi KML ↔ CSV untuk Data Geospasial** - Created by [Rendi Gunawan](https://github.com/rendinawan)")
+    st.markdown("**Aplikasi Konversi KML ↔ CSV untuk Data Geospasial**")
     
     # Sidebar untuk navigasi
     st.sidebar.title("Tools")
@@ -221,76 +319,132 @@ def main():
         uploaded_file = st.file_uploader(
             "Pilih file KML", 
             type=['kml'],
-            help="Upload file KML yang berisi data koordinat"
+            help="Upload file KML yang berisi data koordinat (single route atau multi-route)"
         )
-        
-        # Pilihan format output
-        col1, col2 = st.columns(2)
-        with col1:
-            output_format = st.radio(
-                "Format Output:",
-                ["CSV", "Excel (.xlsx)"],
-                horizontal=True
-            )
         
         if uploaded_file is not None:
             try:
                 # Baca konten file
                 kml_content = uploaded_file.getvalue().decode('utf-8')
                 
-                # Konversi ke CSV
-                df = kml_to_csv(kml_content)
+                # Deteksi apakah ini multi-route atau single route
+                routes = parse_kml_multi_routes(kml_content)
+                is_multi_route = len(routes) > 1
                 
-                if not df.empty:
-                    st.success("✅ File KML berhasil dikonversi!")
+                if is_multi_route:
+                    st.info(f"🔍 Terdeteksi **{len(routes)} routes** dalam file KML")
+                    st.write("**Routes yang ditemukan:**")
+                    route_info = []
+                    total_points = 0
+                    for route_name, coords in routes.items():
+                        route_info.append({
+                            "Route Name": route_name,
+                            "Points": len(coords),
+                            "Estimated Distance (m)": sum([
+                                round(haversine_distance(coords[i][0], coords[i][1], coords[i+1][0], coords[i+1][1]))
+                                for i in range(len(coords)-1)
+                            ]) if len(coords) > 1 else 0
+                        })
+                        total_points += len(coords)
                     
-                    # Tampilkan preview data
-                    st.subheader("Preview Data:")
-                    st.dataframe(df, use_container_width=True)
+                    route_df = pd.DataFrame(route_info)
+                    st.dataframe(route_df, use_container_width=True)
                     
-                    # Informasi statistik
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Titik", len(df))
-                    with col2:
-                        total_distance = df['length'].sum()
-                        if pd.notna(total_distance):
-                            st.metric("Total Jarak", f"{total_distance:.1f} m")
-                    with col3:
-                        avg_distance = df['length'].mean()
-                        if pd.notna(avg_distance):
-                            st.metric("Rata-rata Jarak", f"{avg_distance:.1f} m")
+                    # Untuk multi-route, hanya Excel yang tersedia
+                    st.warning("⚠️ Multi-route hanya mendukung output Excel (multiple sheets)")
                     
-                    # Download berdasarkan format yang dipilih
-                    if output_format == "CSV":
-                        csv_buffer = io.StringIO()
-                        df.to_csv(csv_buffer, sep=';', index=False)
-                        csv_string = csv_buffer.getvalue()
+                    # Konversi ke Excel multi-sheet
+                    excel_buffer = kml_to_multi_excel(kml_content)
+                    
+                    if excel_buffer is not None:
+                        st.success("✅ File KML multi-route berhasil dikonversi!")
                         
-                        st.download_button(
-                            label="📥 Download CSV",
-                            data=csv_string,
-                            file_name="route.csv",
-                            mime="text/csv"
-                        )
-                    else:  # Excel
-                        excel_buffer = BytesIO()
-                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                            df.to_excel(writer, sheet_name='Route Data', index=False)
+                        # Statistik
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Routes", len(routes))
+                        with col2:
+                            st.metric("Total Points", total_points)
+                        with col3:
+                            total_distance = sum([route['Estimated Distance (m)'] for route in route_info])
+                            st.metric("Total Distance", f"{total_distance:.0f} m")
+                        
                         excel_data = excel_buffer.getvalue()
-                        
                         st.download_button(
-                            label="📥 Download Excel",
+                            label="📥 Download Excel (Multi-Sheet)",
                             data=excel_data,
-                            file_name="route.xlsx",
+                            file_name="multiroute.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
-                    
+                    else:
+                        st.error("❌ Gagal mengkonversi file KML multi-route")
+                
                 else:
-                    st.error("❌ Tidak dapat mengekstrak koordinat dari file KML")
+                    # Single route - pilihan CSV atau Excel
+                    st.info("🔍 Terdeteksi **single route** dalam file KML")
                     
+                    # Pilihan format output
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        output_format = st.radio(
+                            "Format Output:",
+                            ["CSV", "Excel (.xlsx)"],
+                            horizontal=True
+                        )
+                    
+                    # Konversi ke CSV/DataFrame
+                    df = kml_to_csv(kml_content)
+                    
+                    if not df.empty:
+                        st.success("✅ File KML berhasil dikonversi!")
+                        
+                        # Tampilkan preview data
+                        st.subheader("Preview Data:")
+                        st.dataframe(df, use_container_width=True)
+                        
+                        # Informasi statistik
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Titik", len(df))
+                        with col2:
+                            total_distance = df['length'].sum()
+                            if pd.notna(total_distance):
+                                st.metric("Total Jarak", f"{total_distance:.1f} m")
+                        with col3:
+                            avg_distance = df['length'].mean()
+                            if pd.notna(avg_distance):
+                                st.metric("Rata-rata Jarak", f"{avg_distance:.1f} m")
+                        
+                        # Download berdasarkan format yang dipilih
+                        if output_format == "CSV":
+                            csv_buffer = io.StringIO()
+                            df.to_csv(csv_buffer, sep=';', index=False)
+                            csv_string = csv_buffer.getvalue()
+                            
+                            st.download_button(
+                                label="📥 Download CSV",
+                                data=csv_string,
+                                file_name="route.csv",
+                                mime="text/csv"
+                            )
+                        else:  # Excel
+                            excel_buffer = BytesIO()
+                            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                                df.to_excel(writer, sheet_name='Route Data', index=False)
+                            excel_data = excel_buffer.getvalue()
+                            
+                            st.download_button(
+                                label="📥 Download Excel",
+                                data=excel_data,
+                                file_name="route.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                    else:
+                        st.error("❌ Tidak dapat mengekstrak koordinat dari file KML")
+                        
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
+                st.info("💡 Pastikan file KML memiliki format yang valid")
     
     elif tool_choice == "CSV/Excel ke KML":
         st.header("📁 Konversi CSV/Excel ke KML")
@@ -378,8 +532,9 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray;'>
-            <p>KMLpro v1.1 - Tool Konversi Data Geospasial</p>
+            <p>KMLpro v1.2 - Tool Konversi Data Geospasial</p>
             <p>Mendukung konversi KML ↔ CSV/Excel dengan perhitungan Haversine</p>
+            <p>✨ Multi-route support dengan Excel multi-sheet</p>
         </div>
         """, 
         unsafe_allow_html=True
