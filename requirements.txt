@@ -1,0 +1,29 @@
+# MappingPro Requirements
+# Core dependencies for the application
+
+# Web framework
+streamlit>=1.28.0
+
+# Data processing and manipulation
+pandas>=2.0.0
+
+# Excel file support
+openpyxl>=3.1.0
+
+# Additional Excel format support (optional)
+xlrd>=2.0.0
+
+# Math and numerical operations (built-in with Python, but explicit for clarity)
+# math - built-in module
+
+# XML processing (built-in with Python)
+# xml.etree.ElementTree - built-in module
+
+# File I/O operations (built-in with Python)  
+# io - built-in module
+
+# Type hints (built-in with Python 3.5+)
+# typing - built-in module
+
+# Regular expressions (built-in with Python)
+# re - built-in module
