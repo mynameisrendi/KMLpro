@@ -274,7 +274,7 @@ def csv_to_kml(df: pd.DataFrame) -> str:
             style_ref = "#m_ylw-pushpin0" if index == 0 else "#m_ylw-pushpin"
             
             placemark = f'''		<Placemark>
-			<name>{int(row['length'])}</name>
+			<name>{row['length']}</name>
 			<LookAt>
 				<longitude>{row['longitude']}</longitude>
 				<latitude>{row['latitude']}</latitude>
